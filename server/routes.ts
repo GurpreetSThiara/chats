@@ -1,10 +1,12 @@
-import type { Express } from "express";
+import type { Express, RequestHandler } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
-import { insertWorkspaceSchema, insertChannelSchema, insertMessageSchema } from "@shared/schema";
+import { insertWorkspaceSchema, insertChannelSchema, insertMessageSchema, signupSchema, loginSchema } from "@shared/schema";
 import multer from "multer";
+import bcrypt from "bcryptjs";
+import session from "express-session";
+import connectPg from "connect-pg-simple";
 
 // Configure multer for file uploads (in-memory storage for now)
 const upload = multer({ 
@@ -12,16 +14,115 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
 
+// Session configuration
+function setupSession(app: Express) {
+  const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
+  const pgStore = connectPg(session);
+  const sessionStore = new pgStore({
+    conString: process.env.DATABASE_URL,
+    createTableIfMissing: false,
+    ttl: sessionTtl,
+    tableName: "sessions",
+  });
+
+  app.use(session({
+    secret: process.env.SESSION_SECRET || "your-secret-key",
+    store: sessionStore,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: false, // Set to true in production with HTTPS
+      maxAge: sessionTtl,
+    },
+  }));
+}
+
+// Auth middleware
+const isAuthenticated: RequestHandler = (req: any, res, next) => {
+  if (req.session && req.session.userId) {
+    return next();
+  }
+  return res.status(401).json({ message: "Unauthorized" });
+};
+
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Auth middleware
-  await setupAuth(app);
+  // Setup session
+  setupSession(app);
 
   // Auth routes
+  app.post('/api/signup', async (req, res) => {
+    try {
+      const userData = signupSchema.parse(req.body);
+      
+      // Check if user already exists
+      const existingUser = await storage.getUserByEmail(userData.email);
+      if (existingUser) {
+        return res.status(400).json({ message: "User already exists" });
+      }
+
+      // Create user
+      const user = await storage.createUser({
+        email: userData.email,
+        password: userData.password,
+        firstName: userData.firstName,
+        lastName: userData.lastName,
+      });
+
+      // Create session
+      (req.session as any).userId = user.id;
+      
+      res.json({ user: { ...user, password: undefined } });
+    } catch (error) {
+      console.error("Signup error:", error);
+      res.status(400).json({ message: error instanceof Error ? error.message : "Failed to create account" });
+    }
+  });
+
+  app.post('/api/login', async (req, res) => {
+    try {
+      const loginData = loginSchema.parse(req.body);
+      
+      // Find user
+      const user = await storage.getUserByEmail(loginData.email);
+      if (!user) {
+        return res.status(401).json({ message: "Invalid email or password" });
+      }
+
+      // Check password
+      const isValidPassword = await bcrypt.compare(loginData.password, user.password);
+      if (!isValidPassword) {
+        return res.status(401).json({ message: "Invalid email or password" });
+      }
+
+      // Create session
+      (req.session as any).userId = user.id;
+      
+      res.json({ user: { ...user, password: undefined } });
+    } catch (error) {
+      console.error("Login error:", error);
+      res.status(400).json({ message: error instanceof Error ? error.message : "Failed to login" });
+    }
+  });
+
+  app.post('/api/logout', (req, res) => {
+    req.session.destroy((err) => {
+      if (err) {
+        return res.status(500).json({ message: "Failed to logout" });
+      }
+      res.clearCookie('connect.sid');
+      res.json({ message: "Logged out successfully" });
+    });
+  });
+
   app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.session.userId;
       const user = await storage.getUser(userId);
-      res.json(user);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      res.json({ ...user, password: undefined });
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
@@ -31,7 +132,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Workspace routes
   app.post('/api/workspaces', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.session.userId;
       const workspaceData = insertWorkspaceSchema.parse({ ...req.body, ownerId: userId });
       const workspace = await storage.createWorkspace(workspaceData);
       res.json(workspace);
@@ -43,7 +144,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/workspaces', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.session.userId;
       const workspaces = await storage.getUserWorkspaces(userId);
       res.json(workspaces);
     } catch (error) {
@@ -78,7 +179,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Channel routes
   app.post('/api/channels', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.session.userId;
       const channelData = insertChannelSchema.parse({ ...req.body, createdById: userId });
       const channel = await storage.createChannel(channelData);
       
@@ -96,7 +197,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/workspaces/:workspaceId/channels', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.session.userId;
       const channels = await storage.getWorkspaceChannels(req.params.workspaceId, userId);
       res.json(channels);
     } catch (error) {
@@ -108,7 +209,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Message routes
   app.post('/api/messages', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.session.userId;
       const messageData = insertMessageSchema.parse({ ...req.body, senderId: userId });
       const message = await storage.createMessage(messageData);
       
@@ -140,7 +241,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Direct message routes
   app.post('/api/direct-messages', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.session.userId;
       const { participants, workspaceId } = req.body;
       
       // Ensure current user is in participants
@@ -156,7 +257,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/workspaces/:workspaceId/direct-messages', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.session.userId;
       const dms = await storage.getUserDirectMessages(userId, req.params.workspaceId);
       res.json(dms);
     } catch (error) {
@@ -194,7 +295,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Reaction routes
   app.post('/api/messages/:messageId/reactions', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.session.userId;
       const { emoji } = req.body;
       await storage.addReaction(req.params.messageId, userId, emoji);
       
@@ -210,7 +311,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete('/api/messages/:messageId/reactions', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.session.userId;
       const { emoji } = req.body;
       await storage.removeReaction(req.params.messageId, userId, emoji);
       

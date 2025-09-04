@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Link } from "wouter";
 import { Zap, MessageSquare, Users, Shield } from "lucide-react";
 
 export default function Landing() {
@@ -19,14 +20,27 @@ export default function Landing() {
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto mb-8">
             Modern team communication designed for productivity. Clean, fast, and intuitive collaboration for modern teams.
           </p>
-          <Button
-            size="lg"
-            className="text-lg px-8 py-6"
-            onClick={() => window.location.href = "/api/login"}
-            data-testid="button-login"
-          >
-            Get Started
-          </Button>
+          <div className="flex gap-4 justify-center">
+            <Link href="/signup">
+              <Button
+                size="lg"
+                className="text-lg px-8 py-6"
+                data-testid="button-signup"
+              >
+                Get Started
+              </Button>
+            </Link>
+            <Link href="/login">
+              <Button
+                size="lg"
+                variant="outline"
+                className="text-lg px-8 py-6"
+                data-testid="button-login"
+              >
+                Sign In
+              </Button>
+            </Link>
+          </div>
         </div>
 
         {/* Features Grid */}

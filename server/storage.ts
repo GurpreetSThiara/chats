@@ -7,7 +7,7 @@ import {
   workspaceMembers,
   channelMembers,
   type User,
-  type UpsertUser,
+  type InsertUser,
   type InsertWorkspace,
   type Workspace,
   type InsertChannel,
@@ -18,16 +18,16 @@ import {
   type DirectMessage,
   type WorkspaceMember,
   type ChannelMember,
-  type InsertWorkspaceMemberSchema,
-  type InsertChannelMemberSchema,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, or, desc, ilike, inArray } from "drizzle-orm";
+import { eq, and, or, desc, ilike, inArray, sql } from "drizzle-orm";
+import bcrypt from "bcryptjs";
 
 export interface IStorage {
   // User operations
   getUser(id: string): Promise<User | undefined>;
-  upsertUser(user: UpsertUser): Promise<User>;
+  getUserByEmail(email: string): Promise<User | undefined>;
+  createUser(user: InsertUser): Promise<User>;
   
   // Workspace operations
   createWorkspace(workspace: InsertWorkspace): Promise<Workspace>;
@@ -65,16 +65,20 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async upsertUser(userData: UpsertUser): Promise<User> {
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email));
+    return user;
+  }
+
+  async createUser(userData: InsertUser): Promise<User> {
+    // Hash password before storing
+    const hashedPassword = await bcrypt.hash(userData.password, 10);
+    
     const [user] = await db
       .insert(users)
-      .values(userData)
-      .onConflictDoUpdate({
-        target: users.id,
-        set: {
-          ...userData,
-          updatedAt: new Date(),
-        },
+      .values({
+        ...userData,
+        password: hashedPassword,
       })
       .returning();
     return user;

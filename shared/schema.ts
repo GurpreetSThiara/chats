@@ -12,7 +12,7 @@ import {
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-// Session storage table for Replit Auth
+// Session storage table
 export const sessions = pgTable(
   "sessions",
   {
@@ -26,9 +26,10 @@ export const sessions = pgTable(
 // Users table
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  email: varchar("email").unique(),
-  firstName: varchar("first_name"),
-  lastName: varchar("last_name"),
+  email: varchar("email").unique().notNull(),
+  password: varchar("password").notNull(),
+  firstName: varchar("first_name").notNull(),
+  lastName: varchar("last_name").notNull(),
   profileImageUrl: varchar("profile_image_url"),
   status: varchar("status").default("Available"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -75,6 +76,17 @@ export const channelMembers = pgTable("channel_members", {
   joinedAt: timestamp("joined_at").defaultNow(),
 });
 
+// Direct messages table
+export const directMessages = pgTable("direct_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  participants: varchar("participants").array().notNull(), // array of user IDs
+  isGroup: boolean("is_group").default(false),
+  name: varchar("name"), // for group DMs
+  workspaceId: varchar("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Messages table
 export const messages = pgTable("messages", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -87,17 +99,6 @@ export const messages = pgTable("messages", {
   mentions: varchar("mentions").array().default([]),
   reactions: jsonb("reactions").default({}),
   isPinned: boolean("is_pinned").default(false),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
-// Direct messages table
-export const directMessages = pgTable("direct_messages", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  participants: varchar("participants").array().notNull(), // array of user IDs
-  isGroup: boolean("is_group").default(false),
-  name: varchar("name"), // for group DMs
-  workspaceId: varchar("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -190,6 +191,19 @@ export const insertUserSchema = createInsertSchema(users).omit({
   updatedAt: true,
 });
 
+export const signupSchema = insertUserSchema.extend({
+  password: z.string().min(6, "Password must be at least 6 characters"),
+  confirmPassword: z.string()
+}).refine((data) => data.password === data.confirmPassword, {
+  message: "Passwords don't match",
+  path: ["confirmPassword"],
+});
+
+export const loginSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(1, "Password is required"),
+});
+
 export const insertWorkspaceSchema = createInsertSchema(workspaces).omit({
   id: true,
   createdAt: true,
@@ -225,8 +239,10 @@ export const insertChannelMemberSchema = createInsertSchema(channelMembers).omit
 });
 
 // Types
-export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
+export type InsertUser = z.infer<typeof insertUserSchema>;
+export type SignupUser = z.infer<typeof signupSchema>;
+export type LoginUser = z.infer<typeof loginSchema>;
 export type InsertWorkspace = z.infer<typeof insertWorkspaceSchema>;
 export type Workspace = typeof workspaces.$inferSelect;
 export type InsertChannel = z.infer<typeof insertChannelSchema>;
