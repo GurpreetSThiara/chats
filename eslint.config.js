@@ -39,7 +39,7 @@ export default [
       'no-unused-vars': 'off', // Use TS-aware version below
 
       // TypeScript
-      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' }],
 
       // React
       'react/jsx-uses-react': 'off',

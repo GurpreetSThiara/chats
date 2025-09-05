@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useWebSocket } from "@/hooks/useWebSocket";
@@ -26,8 +26,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertWorkspaceSchema } from "@shared/schema";
-import type { Workspace, Channel, DirectMessage, WorkspaceMember, User } from "@shared/schema";
+import type { Workspace, Channel, WorkspaceMember, User } from "@shared/schema";
 import { z } from "zod";
 import { Zap } from "lucide-react";
 
@@ -63,9 +62,20 @@ export default function Home() {
   }, [isCreateWorkspaceOpen]);
 
   // WebSocket connection for real-time updates
-  const { isConnected, lastMessage, sendTyping } = useWebSocket(
+  const { lastMessage, sendTyping } = useWebSocket(
     currentChannelId ? [currentChannelId] : currentDmId ? [currentDmId] : []
   );
+
+  const invalidateCurrentMessageList = useCallback(() => {
+    if (currentChannelId) {
+      queryClient.invalidateQueries({ queryKey: ["/api/channels", currentChannelId, "messages"] });
+    } else if (currentDmId) {
+      queryClient.invalidateQueries({ queryKey: ["/api/direct-messages", currentDmId, "messages"] });
+    }
+    if (threadRootMessageId) {
+      queryClient.invalidateQueries({ queryKey: ["/api/threads", threadRootMessageId] });
+    }
+  }, [currentChannelId, currentDmId, threadRootMessageId, queryClient]);
 
   // Fetch user's workspaces
   const { data: workspaces = [], isLoading: workspacesLoading } = useQuery<Workspace[]>({
@@ -188,7 +198,7 @@ export default function Home() {
       default:
         break;
     }
-  }, [lastMessage, currentChannelId, currentDmId]);
+  }, [lastMessage, currentChannelId, currentDmId, invalidateCurrentMessageList]);
 
   // Set default workspace and channel
   useEffect(() => {
@@ -273,17 +283,6 @@ export default function Home() {
   const handleOpenThread = (messageId: string) => {
     setThreadRootMessageId(messageId);
     setThreadOpen(true);
-  };
-
-  const invalidateCurrentMessageList = () => {
-    if (currentChannelId) {
-      queryClient.invalidateQueries({ queryKey: ["/api/channels", currentChannelId, "messages"] });
-    } else if (currentDmId) {
-      queryClient.invalidateQueries({ queryKey: ["/api/direct-messages", currentDmId, "messages"] });
-    }
-    if (threadRootMessageId) {
-      queryClient.invalidateQueries({ queryKey: ["/api/threads", threadRootMessageId] });
-    }
   };
 
   const handleReaction = async (messageId: string, emoji: string) => {

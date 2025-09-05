@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -6,7 +5,6 @@ import { ChannelList } from "./ChannelList";
 import { DirectMessagesList } from "./DirectMessagesList";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
-import { useIsMobile } from "@/hooks/use-mobile";
 import { Zap, MessageCircle, AtSign, Bookmark, PanelLeftClose, Moon, Sun, LogOut } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -33,7 +31,6 @@ export function Sidebar({
 }: SidebarProps) {
   const { user } = useAuth();
   const { theme, toggleTheme } = useTheme();
-  const isMobile = useIsMobile();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 

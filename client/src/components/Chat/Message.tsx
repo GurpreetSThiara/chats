@@ -2,7 +2,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatDistanceToNow } from "date-fns";
-import { MessageCircle, Download, Smile, Edit3, Trash2, Pin } from "lucide-react";
+import { MessageCircle, Download, Edit3, Trash2, Pin } from "lucide-react";
 import { EmojiPicker } from "@/components/Emoji/EmojiPicker";
 import type { Message, User } from "@shared/schema";
 

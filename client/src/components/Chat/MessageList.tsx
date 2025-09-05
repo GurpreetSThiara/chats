@@ -37,7 +37,6 @@ export function MessageList({
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-    refetch,
   } = useInfiniteQuery({
     queryKey: channelId
       ? ["/api/channels", channelId, "messages", PAGE_SIZE]

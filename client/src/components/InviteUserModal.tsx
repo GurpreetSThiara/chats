@@ -4,7 +4,6 @@ import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { useQueryClient } from "@tanstack/react-query";
 import {
   Dialog,
   DialogContent,
@@ -39,7 +38,6 @@ interface InviteUserModalProps {
 export function InviteUserModal({ workspaceId, children }: InviteUserModalProps) {
   const [isOpen, setIsOpen] = useState(false);
   const { toast } = useToast();
-  const queryClient = useQueryClient();
 
   const form = useForm<InviteFormValues>({
     resolver: zodResolver(inviteSchema),

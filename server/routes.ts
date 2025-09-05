@@ -563,7 +563,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   const clients = new Map<string, { ws: WebSocket; userId: string; channels: string[] }>();
 
-  wss.on('connection', (ws, req) => {
+  wss.on('connection', (ws, _req) => {
     console.log('WebSocket connection established');
     
     ws.on('message', (data) => {
