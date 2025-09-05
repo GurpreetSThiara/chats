@@ -2,16 +2,26 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { Menu, Hash, Lock, Search, UserPlus, MoreHorizontal } from "lucide-react";
-import type { Channel } from "@shared/schema";
+import { Menu, Hash, Lock, Search, UserPlus, MoreHorizontal, Pin } from "lucide-react";
+import type { Channel, Workspace } from "@shared/schema";
+import { InviteUserModal } from "@/components/InviteUserModal";
+import { NotificationBell } from "@/components/Notifications/NotificationBell";
 
 interface HeaderProps {
   currentChannel?: Channel;
+  workspaceId?: string;
   onToggleSidebar: () => void;
   onSearch?: (query: string) => void;
+  // Workspace switching
+  workspaces?: Workspace[];
+  currentWorkspace?: Workspace;
+  onWorkspaceChange?: (workspaceId: string) => void;
+  // RBAC UI
+  canInvite?: boolean;
+  onOpenPins?: () => void;
 }
 
-export function Header({ currentChannel, onToggleSidebar, onSearch }: HeaderProps) {
+export function Header({ currentChannel, workspaceId, onToggleSidebar, onSearch, workspaces, currentWorkspace, onWorkspaceChange, canInvite = true, onOpenPins }: HeaderProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const isMobile = useIsMobile();
 
@@ -34,7 +44,20 @@ export function Header({ currentChannel, onToggleSidebar, onSearch }: HeaderProp
         >
           <Menu className="w-5 h-5" />
         </Button>
-        
+        {/* Workspace Switcher */}
+        {workspaces && workspaces.length > 0 && currentWorkspace && (
+          <select
+            className="bg-muted border rounded px-2 py-1 text-sm"
+            value={currentWorkspace.id}
+            onChange={(e) => onWorkspaceChange?.(e.target.value)}
+            data-testid="select-workspace-switcher"
+          >
+            {workspaces.map((ws) => (
+              <option key={ws.id} value={ws.id}>{ws.name}</option>
+            ))}
+          </select>
+        )}
+
         {currentChannel && (
           <>
             {currentChannel.type === "private" ? (
@@ -74,14 +97,31 @@ export function Header({ currentChannel, onToggleSidebar, onSearch }: HeaderProp
           </form>
         )}
         
-        <Button
-          variant="ghost"
-          size="sm"
-          className="p-2"
-          data-testid="button-invite-users"
-        >
-          <UserPlus className="w-5 h-5" />
-        </Button>
+        {workspaceId && canInvite && (
+          <InviteUserModal workspaceId={workspaceId}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="p-2"
+              data-testid="button-invite-users"
+            >
+              <UserPlus className="w-5 h-5" />
+            </Button>
+          </InviteUserModal>
+        )}
+        {currentChannel && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="p-2"
+            onClick={onOpenPins}
+            data-testid="button-open-pins"
+            title="Show pinned messages"
+          >
+            <Pin className="w-5 h-5" />
+          </Button>
+        )}
+        <NotificationBell />
         <Button
           variant="ghost"
           size="sm"

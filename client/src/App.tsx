@@ -9,6 +9,7 @@ import Landing from "@/pages/Landing";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
 import Home from "@/pages/Home";
+import InvitesPage from "@/pages/Invites";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -19,6 +20,7 @@ function Router() {
       {!isLoading && isAuthenticated ? (
         <>
           <Route path="/" component={Home} />
+          <Route path="/invites" component={InvitesPage} />
         </>
       ) : (
         <>

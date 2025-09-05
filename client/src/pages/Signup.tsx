@@ -21,6 +21,7 @@ export default function Signup() {
     defaultValues: {
       email: "",
       password: "",
+      confirmPassword: "",
       firstName: "",
       lastName: "",
     },
@@ -130,6 +131,24 @@ export default function Signup() {
                         type="password"
                         placeholder="Create a password"
                         data-testid="input-password"
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="confirmPassword"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Confirm Password</FormLabel>
+                    <FormControl>
+                      <Input
+                        {...field}
+                        type="password"
+                        placeholder="Confirm your password"
+                        data-testid="input-confirm-password"
                       />
                     </FormControl>
                     <FormMessage />

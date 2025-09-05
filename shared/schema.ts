@@ -7,6 +7,7 @@ import {
   boolean,
   jsonb,
   index,
+  uniqueIndex,
   integer,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
@@ -48,13 +49,19 @@ export const workspaces = pgTable("workspaces", {
 });
 
 // Workspace members table
-export const workspaceMembers = pgTable("workspace_members", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  workspaceId: varchar("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  role: varchar("role").notNull().default("member"), // admin, member, guest
-  joinedAt: timestamp("joined_at").defaultNow(),
-});
+export const workspaceMembers = pgTable(
+  "workspace_members",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    workspaceId: varchar("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    role: varchar("role").notNull().default("member"), // admin, member, guest
+    joinedAt: timestamp("joined_at").defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uniq_workspace_member").on(table.workspaceId, table.userId),
+  ]
+);
 
 // Channels table
 export const channels = pgTable("channels", {
@@ -69,12 +76,18 @@ export const channels = pgTable("channels", {
 });
 
 // Channel members table (for private channels)
-export const channelMembers = pgTable("channel_members", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  channelId: varchar("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  joinedAt: timestamp("joined_at").defaultNow(),
-});
+export const channelMembers = pgTable(
+  "channel_members",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    channelId: varchar("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    joinedAt: timestamp("joined_at").defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uniq_channel_member").on(table.channelId, table.userId),
+  ]
+);
 
 // Direct messages table
 export const directMessages = pgTable("direct_messages", {
@@ -87,21 +100,52 @@ export const directMessages = pgTable("direct_messages", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Messages table
-export const messages = pgTable("messages", {
+// Workspace invites table (for in-app invitations)
+export const workspaceInvites = pgTable("workspace_invites", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  content: text("content").notNull(),
-  channelId: varchar("channel_id").references(() => channels.id, { onDelete: "cascade" }),
-  directMessageId: varchar("direct_message_id").references(() => directMessages.id, { onDelete: "cascade" }),
-  senderId: varchar("sender_id").notNull().references(() => users.id),
-  parentMessageId: varchar("parent_message_id").references(() => messages.id), // for threads
-  fileUrls: text("file_urls").array().default([]),
-  mentions: varchar("mentions").array().default([]),
-  reactions: jsonb("reactions").default({}),
-  isPinned: boolean("is_pinned").default(false),
+  workspaceId: varchar("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  inviterId: varchar("inviter_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  inviteeEmail: varchar("invitee_email").notNull(),
+  inviteeUserId: varchar("invitee_user_id").references(() => users.id, { onDelete: "set null" }),
+  role: varchar("role").notNull().default("member"), // admin, member, guest
+  status: varchar("status").notNull().default("pending"), // pending, accepted, declined, expired
+  token: varchar("token"), // optional signed token for link-based acceptance
+  expiresAt: timestamp("expires_at"),
   createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+// Notifications table (in-app notifications)
+export const notifications = pgTable("notifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  type: varchar("type").notNull(), // e.g., invite.created, invite.accepted
+  data: jsonb("data").notNull().default({}),
+  isRead: boolean("is_read").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Messages table
+export const messages = pgTable(
+  "messages",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    content: text("content").notNull(),
+    channelId: varchar("channel_id").references(() => channels.id, { onDelete: "cascade" }),
+    directMessageId: varchar("direct_message_id").references(() => directMessages.id, { onDelete: "cascade" }),
+    senderId: varchar("sender_id").notNull().references(() => users.id),
+    // Note: avoid self-referencing FK here to prevent TS self-reference lint; relations below capture linkage
+    parentMessageId: varchar("parent_message_id"), // for threads (references messages.id logically)
+    fileUrls: text("file_urls").array().default([]),
+    mentions: varchar("mentions").array().default([]),
+    reactions: jsonb("reactions").default({}),
+    isPinned: boolean("is_pinned").default(false),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_messages_parent").on(table.parentMessageId),
+  ]
+);
 
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
@@ -109,6 +153,8 @@ export const usersRelations = relations(users, ({ many }) => ({
   channelMembers: many(channelMembers),
   sentMessages: many(messages),
   ownedWorkspaces: many(workspaces),
+  invitesSent: many(workspaceInvites),
+  notifications: many(notifications),
 }));
 
 export const workspacesRelations = relations(workspaces, ({ one, many }) => ({
@@ -119,6 +165,7 @@ export const workspacesRelations = relations(workspaces, ({ one, many }) => ({
   members: many(workspaceMembers),
   channels: many(channels),
   directMessages: many(directMessages),
+  invites: many(workspaceInvites),
 }));
 
 export const workspaceMembersRelations = relations(workspaceMembers, ({ one }) => ({
@@ -184,6 +231,28 @@ export const directMessagesRelations = relations(directMessages, ({ one, many })
   messages: many(messages),
 }));
 
+export const workspaceInvitesRelations = relations(workspaceInvites, ({ one }) => ({
+  workspace: one(workspaces, {
+    fields: [workspaceInvites.workspaceId],
+    references: [workspaces.id],
+  }),
+  inviter: one(users, {
+    fields: [workspaceInvites.inviterId],
+    references: [users.id],
+  }),
+  inviteeUser: one(users, {
+    fields: [workspaceInvites.inviteeUserId],
+    references: [users.id],
+  }),
+}));
+
+export const notificationsRelations = relations(notifications, ({ one }) => ({
+  user: one(users, {
+    fields: [notifications.userId],
+    references: [users.id],
+  }),
+}));
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -238,6 +307,16 @@ export const insertChannelMemberSchema = createInsertSchema(channelMembers).omit
   joinedAt: true,
 });
 
+export const insertWorkspaceInviteSchema = createInsertSchema(workspaceInvites).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertNotificationSchema = createInsertSchema(notifications).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -253,3 +332,7 @@ export type InsertDirectMessage = z.infer<typeof insertDirectMessageSchema>;
 export type DirectMessage = typeof directMessages.$inferSelect;
 export type WorkspaceMember = typeof workspaceMembers.$inferSelect;
 export type ChannelMember = typeof channelMembers.$inferSelect;
+export type InsertWorkspaceInvite = z.infer<typeof insertWorkspaceInviteSchema>;
+export type WorkspaceInvite = typeof workspaceInvites.$inferSelect;
+export type InsertNotification = z.infer<typeof insertNotificationSchema>;
+export type Notification = typeof notifications.$inferSelect;

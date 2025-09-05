@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useWebSocket } from "@/hooks/useWebSocket";
@@ -10,8 +10,12 @@ import { apiRequest } from "@/lib/queryClient";
 import { Sidebar } from "@/components/Sidebar/Sidebar";
 import { Header } from "@/components/Layout/Header";
 import { MessageList } from "@/components/Chat/MessageList";
+import { ThreadPanel } from "@/components/Chat/ThreadPanel";
 import { MessageInput } from "@/components/Chat/MessageInput";
 import { MemberList } from "@/components/RightPanel/MemberList";
+import { EditMessageModal } from "@/components/Modals/EditMessageModal";
+import { PinsDialog } from "@/components/Modals/PinsDialog";
+import { DeleteConfirmationModal } from "@/components/Modals/DeleteConfirmationModal";
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -23,10 +27,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertWorkspaceSchema } from "@shared/schema";
-import type { Workspace, Channel, DirectMessage } from "@shared/schema";
+import type { Workspace, Channel, DirectMessage, WorkspaceMember, User } from "@shared/schema";
 import { z } from "zod";
+import { Zap } from "lucide-react";
 
-const createWorkspaceSchema = insertWorkspaceSchema.extend({
+// Remove ownerId from the schema as it will be added in the mutation
+const createWorkspaceSchema = z.object({
   name: z.string().min(1, "Workspace name is required").max(50),
   description: z.string().optional(),
 });
@@ -42,6 +48,19 @@ export default function Home() {
   const [currentDmId, setCurrentDmId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(isMobile);
   const [isCreateWorkspaceOpen, setIsCreateWorkspaceOpen] = useState(false);
+  const [threadOpen, setThreadOpen] = useState(false);
+  const [threadRootMessageId, setThreadRootMessageId] = useState<string | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingInitial, setEditingInitial] = useState<string>("");
+  const [pinsOpen, setPinsOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
+  
+  // Debug dialog state
+  useEffect(() => {
+    console.log('Dialog open state:', isCreateWorkspaceOpen);
+  }, [isCreateWorkspaceOpen]);
 
   // WebSocket connection for real-time updates
   const { isConnected, lastMessage, sendTyping } = useWebSocket(
@@ -53,6 +72,17 @@ export default function Home() {
     queryKey: ["/api/workspaces"],
     enabled: !!user,
   });
+
+  // Fetch current workspace members to determine role (admin/member)
+  const { data: members = [] } = useQuery<(WorkspaceMember & { user: User })[]>({
+    queryKey: ["/api/workspaces", currentWorkspace?.id, "members"],
+    enabled: !!currentWorkspace?.id,
+  });
+
+  const canInvite = useMemo(() => {
+    if (!user?.id) return false;
+    return members.some((m) => m.userId === user.id && m.role === "admin");
+  }, [members, user]);
 
   // Fetch current channel data
   const { data: currentChannel } = useQuery<Channel>({
@@ -67,12 +97,48 @@ export default function Home() {
       name: "",
       description: "",
     },
+    mode: "onChange", // Enable real-time validation
   });
+
+  // Debug form state
+  useEffect(() => {
+    const subscription = createWorkspaceForm.watch((value) => {
+      console.log('Form values:', value);
+      console.log('Form state:', {
+        isDirty: createWorkspaceForm.formState.isDirty,
+        isValid: createWorkspaceForm.formState.isValid,
+        errors: createWorkspaceForm.formState.errors
+      });
+    });
+    return () => subscription.unsubscribe();
+  }, [createWorkspaceForm]);
 
   const createWorkspaceMutation = useMutation({
     mutationFn: async (data: z.infer<typeof createWorkspaceSchema>) => {
-      const response = await apiRequest("POST", "/api/workspaces", data);
-      return response.json();
+      if (!user?.id) {
+        throw new Error('User must be logged in to create a workspace');
+      }
+
+      // Add ownerId to the workspace data
+      const workspaceData = {
+        ...data,
+        ownerId: user.id
+      };
+
+      console.log('Sending workspace creation request:', workspaceData);
+      try {
+        const response = await apiRequest("POST", "/api/workspaces", workspaceData);
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to create workspace');
+        }
+        const result = await response.json();
+        console.log('Workspace created successfully:', result);
+        return result;
+      } catch (error) {
+        console.error('Error creating workspace:', error);
+        throw error;
+      }
     },
     onSuccess: (workspace) => {
       queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
@@ -106,19 +172,23 @@ export default function Home() {
 
   // Handle WebSocket messages
   useEffect(() => {
-    if (lastMessage) {
-      const { type, data, channelId } = lastMessage;
-      
-      if (type === "message" && (channelId === currentChannelId || channelId === currentDmId)) {
-        // Invalidate messages to show new message
-        if (currentChannelId) {
-          queryClient.invalidateQueries({ queryKey: ["/api/channels", currentChannelId, "messages"] });
-        } else if (currentDmId) {
-          queryClient.invalidateQueries({ queryKey: ["/api/direct-messages", currentDmId, "messages"] });
-        }
-      }
+    if (!lastMessage) return;
+    const { type, channelId } = lastMessage;
+
+    const shouldAffectCurrent = channelId === currentChannelId || channelId === currentDmId || !channelId;
+    if (!shouldAffectCurrent) return;
+
+    switch (type) {
+      case "message":
+      case "message.updated":
+      case "message.deleted":
+      case "reactionUpdate":
+        invalidateCurrentMessageList();
+        break;
+      default:
+        break;
     }
-  }, [lastMessage, currentChannelId, currentDmId, queryClient]);
+  }, [lastMessage, currentChannelId, currentDmId]);
 
   // Set default workspace and channel
   useEffect(() => {
@@ -143,6 +213,19 @@ export default function Home() {
     }
   }, [currentWorkspace, currentChannelId, currentDmId, queryClient]);
 
+  const handleWorkspaceChange = (workspaceId: string) => {
+    const next = workspaces.find((w) => w.id === workspaceId) || null;
+    setCurrentWorkspace(next);
+    // reset channel and DM selection when switching workspaces
+    setCurrentChannelId(null);
+    setCurrentDmId(null);
+    // prefetch channels for the new workspace
+    if (next) {
+      queryClient.invalidateQueries({ queryKey: ["/api/workspaces", next.id, "channels"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/workspaces", next.id, "members"] });
+    }
+  };
+
   // Handle auth redirect
   useEffect(() => {
     if (!authLoading && !user) {
@@ -159,6 +242,7 @@ export default function Home() {
   }, [user, authLoading, toast]);
 
   const onCreateWorkspace = (data: z.infer<typeof createWorkspaceSchema>) => {
+    console.log('Creating workspace with data:', data);
     createWorkspaceMutation.mutate(data);
   };
 
@@ -183,6 +267,156 @@ export default function Home() {
       sendTyping(currentChannelId, isTyping);
     } else if (currentDmId) {
       sendTyping(currentDmId, isTyping);
+    }
+  };
+
+  const handleOpenThread = (messageId: string) => {
+    setThreadRootMessageId(messageId);
+    setThreadOpen(true);
+  };
+
+  const invalidateCurrentMessageList = () => {
+    if (currentChannelId) {
+      queryClient.invalidateQueries({ queryKey: ["/api/channels", currentChannelId, "messages"] });
+    } else if (currentDmId) {
+      queryClient.invalidateQueries({ queryKey: ["/api/direct-messages", currentDmId, "messages"] });
+    }
+    if (threadRootMessageId) {
+      queryClient.invalidateQueries({ queryKey: ["/api/threads", threadRootMessageId] });
+    }
+  };
+
+  const handleReaction = async (messageId: string, emoji: string) => {
+    try {
+      // Determine if current user already reacted with this emoji
+      const currentUserId = user?.id;
+      let alreadyReacted = false;
+      if (currentUserId) {
+        // Check in channel/DM cache
+        let listKeys: (string | undefined)[][] = [];
+        if (currentChannelId) listKeys.push(["/api/channels", currentChannelId, "messages"]);
+        if (currentDmId) listKeys.push(["/api/direct-messages", currentDmId, "messages"]);
+        if (threadRootMessageId) listKeys.push(["/api/threads", threadRootMessageId] as unknown as string[]);
+
+        for (const key of listKeys) {
+          const data: any = queryClient.getQueryData(key as any);
+          if (!data) continue;
+          const messagesArr: any[] | undefined = Array.isArray(data) ? data : undefined;
+          const threadTree: any = !messagesArr ? data : undefined;
+          const findInThread = (node: any): any | undefined => {
+            if (!node) return undefined;
+            if (node.message?.id === messageId) return node.message;
+            if (Array.isArray(node.replies)) {
+              for (const r of node.replies) {
+                const found = findInThread(r);
+                if (found) return found;
+              }
+            }
+            return undefined;
+          };
+          let msg: any | undefined;
+          if (messagesArr) {
+            msg = messagesArr.find((m) => m.id === messageId);
+          } else if (threadTree) {
+            msg = findInThread(threadTree);
+          }
+          if (msg) {
+            const reactions: Record<string, string[]> = (msg.reactions as any) || {};
+            alreadyReacted = Array.isArray(reactions[emoji]) && reactions[emoji].includes(currentUserId);
+            break;
+          }
+        }
+      }
+
+      if (alreadyReacted) {
+        await apiRequest("DELETE", `/api/messages/${messageId}/reactions`, { emoji });
+      } else {
+        await apiRequest("POST", `/api/messages/${messageId}/reactions`, { emoji });
+      }
+      invalidateCurrentMessageList();
+    } catch (e) {
+      console.error("Failed to add reaction:", e);
+    }
+  };
+
+  const openEditModalFor = (messageId: string) => {
+    // Try to locate message content from cache to prefill
+    const findContent = (): string => {
+      const keysToTry: (string | undefined)[][] = [];
+      if (currentChannelId) keysToTry.push(["/api/channels", currentChannelId, "messages"]);
+      if (currentDmId) keysToTry.push(["/api/direct-messages", currentDmId, "messages"]);
+      if (threadRootMessageId) keysToTry.push(["/api/threads", threadRootMessageId] as unknown as string[]);
+      for (const key of keysToTry) {
+        const data: any = queryClient.getQueryData(key as any);
+        if (!data) continue;
+        const arr: any[] | undefined = Array.isArray(data) ? data : undefined;
+        if (arr) {
+          const m = arr.find((x) => x.id === messageId);
+          if (m) return m.content || "";
+        } else {
+          // thread tree
+          const findInThread = (node: any): any | undefined => {
+            if (!node) return undefined;
+            if (node.message?.id === messageId) return node.message;
+            for (const r of node.replies || []) {
+              const f = findInThread(r);
+              if (f) return f;
+            }
+            return undefined;
+          };
+          const node = findInThread(data);
+          if (node) return node.content || "";
+        }
+      }
+      return "";
+    };
+    setEditingMessageId(messageId);
+    setEditingInitial(findContent());
+    setEditOpen(true);
+  };
+
+  const handleEditMessage = async (messageId: string) => {
+    openEditModalFor(messageId);
+  };
+
+  const handleDeleteMessage = async (messageId: string) => {
+    setDeletingMessageId(messageId);
+    setDeleteOpen(true);
+  };
+
+  const confirmDeleteMessage = async () => {
+    if (!deletingMessageId) return;
+    try {
+      await apiRequest("DELETE", `/api/messages/${deletingMessageId}`);
+      setDeleteOpen(false);
+      setDeletingMessageId(null);
+      invalidateCurrentMessageList();
+    } catch (e) {
+      console.error("Failed to delete message:", e);
+      setDeleteOpen(false);
+      setDeletingMessageId(null);
+    }
+  };
+
+  const handleTogglePin = async (messageId: string, nextPinned: boolean) => {
+    try {
+      await apiRequest("PATCH", `/api/messages/${messageId}`, { isPinned: nextPinned });
+      invalidateCurrentMessageList();
+    } catch (e) {
+      console.error("Failed to toggle pin:", e);
+    }
+  };
+
+  const handleSaveEdit = async (content: string) => {
+    if (!editingMessageId) return;
+    try {
+      await apiRequest("PATCH", `/api/messages/${editingMessageId}`, { content });
+      setEditOpen(false);
+      setEditingMessageId(null);
+      setEditingInitial("");
+      invalidateCurrentMessageList();
+    } catch (e) {
+      console.error("Failed to edit message:", e);
     }
   };
 
@@ -236,7 +470,12 @@ export default function Home() {
               <DialogTitle>Create Workspace</DialogTitle>
             </DialogHeader>
             <Form {...createWorkspaceForm}>
-              <form onSubmit={createWorkspaceForm.handleSubmit(onCreateWorkspace)} className="space-y-4">
+              <form 
+                onSubmit={createWorkspaceForm.handleSubmit((data) => {
+                  console.log('Form submitted with data:', data);
+                  onCreateWorkspace(data);
+                })} 
+                className="space-y-4">
                 <FormField
                   control={createWorkspaceForm.control}
                   name="name"
@@ -283,11 +522,11 @@ export default function Home() {
                     Cancel
                   </Button>
                   <Button 
-                    type="submit" 
+                    type="submit"
                     disabled={createWorkspaceMutation.isPending}
                     data-testid="button-submit-workspace"
                   >
-                    Create Workspace
+                    {createWorkspaceMutation.isPending ? "Creating..." : "Create Workspace"}
                   </Button>
                 </div>
               </form>
@@ -314,14 +553,25 @@ export default function Home() {
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
         <Header
-          currentChannel={currentChannel}
+          currentChannel={currentChannel || undefined}
+          workspaceId={currentWorkspace?.id}
+          workspaces={workspaces}
+          currentWorkspace={currentWorkspace || undefined}
+          onWorkspaceChange={handleWorkspaceChange}
+          canInvite={canInvite}
           onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
+          onOpenPins={() => setPinsOpen(true)}
         />
         
         <MessageList
           channelId={currentChannelId || undefined}
           directMessageId={currentDmId || undefined}
           currentChannel={currentChannel}
+          onReaction={handleReaction}
+          onEdit={handleEditMessage}
+          onDelete={handleDeleteMessage}
+          onPin={handleTogglePin}
+          onReply={handleOpenThread}
         />
         
         <MessageInput
@@ -338,6 +588,43 @@ export default function Home() {
       
       {/* Right Panel */}
       <MemberList workspaceId={currentWorkspace.id} />
+      {threadOpen && threadRootMessageId && (
+        <ThreadPanel
+          rootMessageId={threadRootMessageId}
+          open={threadOpen}
+          onClose={() => setThreadOpen(false)}
+          onReaction={handleReaction}
+          onEdit={handleEditMessage}
+          onDelete={handleDeleteMessage}
+          onPin={handleTogglePin}
+        />
+      )}
+
+      <EditMessageModal
+        open={editOpen}
+        initialValue={editingInitial}
+        onClose={() => setEditOpen(false)}
+        onSave={handleSaveEdit}
+      />
+
+      <PinsDialog
+        open={pinsOpen}
+        onClose={() => setPinsOpen(false)}
+        channelId={currentChannelId}
+        directMessageId={currentDmId}
+        onPin={handleTogglePin}
+      />
+
+      <DeleteConfirmationModal
+        open={deleteOpen}
+        onClose={() => {
+          setDeleteOpen(false);
+          setDeletingMessageId(null);
+        }}
+        onConfirm={confirmDeleteMessage}
+        title="Delete message"
+        description="Are you sure you want to delete this message? This action cannot be undone."
+      />
     </div>
   );
 }
