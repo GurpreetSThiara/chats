@@ -1,0 +1,10 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# Run lint-staged on staged files (auto-fix where possible)
+echo "Running lint-staged..."
+npx --no-install lint-staged
+
+# Block commit on TypeScript errors across the project
+echo "Running TypeScript checks..."
+npm run -s check
